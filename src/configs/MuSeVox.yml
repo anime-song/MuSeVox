@@ -1,0 +1,61 @@
+sampling_rate: 22050
+num_channels: 2
+n_mels: 160
+log_scale_input: true
+n_fft: 512
+window_length: 512
+hop_length: 128
+istft_n_fft: 64
+istft_window_length: 64
+istft_hop_length: 16
+mel_loss_n_mels: [5, 10, 20, 40, 80, 160, 320,]
+mel_loss_window_length: [64, 128, 256, 512, 1024, 2048, 4096,]
+mel_loss_fmin: [0, 0, 0, 0, 0, 0, 0]
+mel_loss_fmax: [null, null, null, null, null, null, null]
+mel_loss_weights: [1, 1, 1, 1, 1, 1, 1]
+##############################################################
+# generator
+##############################################################
+encoder_dim: 512
+encoder_embedding_dim: 512
+decoder_dim: 1024
+decoder_num_layers: 1
+decoder_strides: [4, 4, 2]
+decoder_module_type: mrf
+decoder_activation: leakyrelu
+decoder_use_max_norm: false
+decoder_use_scaling: true
+decoder_scaling_loss_weight: 1.0e-03
+inverse_mode: stft
+phase_activation: "null"
+
+##############################################################
+# Discriminator
+##############################################################
+discriminator_stft_params:
+  [[1024, 256, 1024], [2048, 512, 2048], [4096, 1024, 4096]]
+discriminator_periods: [2, 3, 5, 7, 11]
+mrd_loss_weight: 1.0
+discriminator_activation: leakyrelu
+##############################################################
+# training
+##############################################################
+initial_step: 0
+epochs: 500
+batch_size: 4
+patch_len: 22050
+cache_size: 250
+mel_loss_weight: 4
+feature_loss_weight: 2
+generator_loss_weight: 1
+discriminator_loss_type: "mse"
+log_dir: ./logs/
+mix_folder_path: "./Dataset/Processed"
+piano_folder_path: "./Dataset/Processed"
+model_save_freq: 10000
+epoch_max_steps: 10000
+learning_rate_warmup_steps: 0
+plot_interval_step: 10000
+discriminator_update_prob: 1.0
+discriminator_step_list: [400000, 1300000]
+generator_step_list: [400000, 1300000]
