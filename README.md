@@ -27,6 +27,7 @@ Next, we prepare the piano audio that will be used for source separation. Please
 
 ## Converting Audio Files to H5 Format
 To prepare the audio for training, the generated audio files need to be converted into H5 format using the provided script. This conversion is performed separately for the mixed audio and the piano audio.
+
 **Important:**
 Before proceeding, note that the mix_folder_path and piano_folder_path settings in src/configs/MuSeVox.yml refer to the locations where the H5 files will be saved, not the directories containing the original audio files. Ensure that these paths are correctly set to your desired H5 output directories.
 
