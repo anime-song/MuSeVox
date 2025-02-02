@@ -195,12 +195,14 @@ class DataGeneratorBatch(keras.utils.Sequence):
             piano_data = self.piano_dataloader.select_data()[0]
             mix_data = self.mix_dataloader.select_data()[0]
 
+            piano_scale = np.random.uniform(0.25, 1.25)
+            other_scale = np.random.uniform(0.25, 1.25)
             piano_nframes = piano_data.shape[1]
             mix_nframes = mix_data.shape[1]
-            PIANO[batch, :piano_nframes, 0] = piano_data[0]
-            PIANO[batch, :piano_nframes, 1] = piano_data[1]
-            MIX[batch, :mix_nframes, 0] = mix_data[0]
-            MIX[batch, :mix_nframes, 1] = mix_data[1]
+            PIANO[batch, :piano_nframes, 0] = piano_data[0] * piano_scale
+            PIANO[batch, :piano_nframes, 1] = piano_data[1] * piano_scale
+            MIX[batch, :mix_nframes, 0] = mix_data[0] * other_scale
+            MIX[batch, :mix_nframes, 1] = mix_data[1] * other_scale
 
         return [PIANO, MIX], [PIANO, MIX]
 

@@ -9,7 +9,8 @@ def preprocess_wav(y, sampling_rate, target_loudness=-24.0):
     y = pyln.normalize.loudness(y.T, loudness, target_loudness)
 
     gain_db = target_loudness - loudness
-    return y.T, gain_db
+    gain_factor = 10 ** (gain_db / 20)
+    return y.T, gain_db, gain_factor
 
 
 def postprocess_wav(y, sampling_rate, gain_db):

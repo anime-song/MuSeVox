@@ -192,7 +192,7 @@ class AcousticTokenTrainer:
 
         # SDR 計算（対数変換）
         sdr = 10 * log10(s_true_power / (s_error_power + 1e-10))  # 0 除算を防ぐ
-        return sdr
+        return tf.reduce_mean(sdr)
 
     def train(self, train_gen, test_gen):
         logs = {}

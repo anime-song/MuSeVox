@@ -12,16 +12,8 @@ from util import preprocess_wav, postprocess_wav
 tf.config.set_visible_devices([], "GPU")
 
 parser = argparse.ArgumentParser()
-parser.add_argument(
-    "-c", "--config", type=str, required=True, help="コンフィグファイルのファイルパス"
-)
-parser.add_argument(
-    "-g_p",
-    "--g_checkpoint_path",
-    type=str,
-    required=True,
-    help="ジェネレータのモデルの重みのパス",
-)
+parser.add_argument("-c", "--config", type=str, required=True, help="コンフィグファイルのファイルパス")
+parser.add_argument("-g_p", "--g_checkpoint_path", type=str, required=True, help="ジェネレータのモデルの重みのパス")
 args = parser.parse_args()
 
 config = OmegaConf.load(args.config)
@@ -32,9 +24,7 @@ model, intermediate_model = AcousticModel.from_pretrain(
 
 file = input("楽曲：")
 orig_y, original_sr = librosa.load(file, sr=None, mono=False)
-y = librosa.resample(
-    orig_y, orig_sr=original_sr, target_sr=config.sampling_rate, scale=True
-)
+y = librosa.resample(orig_y, orig_sr=original_sr, target_sr=config.sampling_rate, scale=True)
 y, gain_db, gain_factor = preprocess_wav(y, config.sampling_rate)
 orig_y = orig_y * gain_factor
 
@@ -47,9 +37,7 @@ y = y[np.newaxis, ...]
 separated_piano = intermediate_model(y).numpy()[0]
 
 # 元の音源とずれが発生するため、リサンプリングしてから保存
-separated_piano = librosa.resample(
-    separated_piano.T, orig_sr=config.sampling_rate, target_sr=original_sr, scale=True
-).T
+separated_piano = librosa.resample(separated_piano.T, orig_sr=config.sampling_rate, target_sr=original_sr, scale=True).T
 min_length = min(orig_y.shape[1], separated_piano.shape[0])
 separated_other = orig_y.T[:min_length] - separated_piano[:min_length]
 
@@ -64,9 +52,7 @@ separated_piano_audio = AudioSegment(
     sample_width=2,
     channels=separated_piano.shape[1],
 )
-separated_piano_audio.export(
-    "./audio_samples/separated_piano.mp3", format="mp3", bitrate="192k"
-)
+separated_piano_audio.export("./audio_samples/separated_piano.mp3", format="mp3", bitrate="192k")
 
 separated_other_audio = AudioSegment(
     (separated_other * 32767).astype(np.int16).tobytes(),
@@ -74,6 +60,4 @@ separated_other_audio = AudioSegment(
     sample_width=2,
     channels=separated_other.shape[1],
 )
-separated_other_audio.export(
-    "./audio_samples/separated_other.mp3", format="mp3", bitrate="192k"
-)
+separated_other_audio.export("./audio_samples/separated_other.mp3", format="mp3", bitrate="192k")

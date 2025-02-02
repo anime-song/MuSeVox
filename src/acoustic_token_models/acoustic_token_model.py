@@ -1,4 +1,3 @@
-import einops
 import tensorflow as tf
 
 from losses import STFT, inverse_stft
@@ -6,11 +5,11 @@ from model_utils import (
     RMSNorm,
     Snake,
     SnakeBeta,
-    ScalingLayer,
     WeightNormalization,
     PositionalEncoding,
 )
 from latent_transformer import LatentTransformer
+from acoustic_token_models.SCNet import FusionLayer, SDBlock, SULayer
 
 
 def get_activation_layer(activation):
@@ -85,270 +84,198 @@ def dense(hidden_size, activation=None, use_bias=True):
     return tf.keras.layers.Dense(hidden_size, activation=activation, use_bias=use_bias)
 
 
-class ConvNeXtModule(tf.keras.layers.Layer):
-    def __init__(self, hidden_size, activation="swish", **kwargs):
+class DualPathBlock(tf.keras.layers.Layer):
+    def __init__(self, hidden_size, chunks_length, **kwargs):
         super().__init__(**kwargs)
+
         self.hidden_size = hidden_size
+        self.time_pos_enc = PositionalEncoding(hidden_size, dtype=tf.float32)
+        self.time_transformer = LatentTransformer(hidden_size, num_layers=1)
+        self.time_linear = tf.keras.layers.Dense(hidden_size)
+        self.time_norm = RMSNorm()
 
-        self.depthwise_conv = tf.keras.layers.DepthwiseConv1D(kernel_size=7, padding="same")
-        self.norm = RMSNorm()
-
-        self.pointwise_conv1 = dense(hidden_size * 4, activation=get_activation_layer(activation))
-        self.pointwise_conv2 = dense(hidden_size)
-        self.gamma = self.add_weight(name="gamma", initializer="ones", trainable=True)
+        self.freq_proj = tf.keras.layers.Dense(hidden_size)
+        self.freq_pos_enc = PositionalEncoding(hidden_size, dtype=tf.float32)
+        self.freq_transformer = LatentTransformer(hidden_size, num_layers=1)
+        self.freq_linear = tf.keras.layers.Dense(hidden_size)
+        self.freq_norm = RMSNorm()
 
     def call(self, inputs, training=False):
+        # inputs: (batch * segment_num, chunks_length, freq, num_channels)
+        batch_size = tf.shape(inputs)[0]
+        chunks_length = tf.shape(inputs)[1]
+        freq = tf.shape(inputs)[2]
+        num_channels = tf.shape(inputs)[3]
+
+        # freq
         residual = inputs
+        inputs = tf.reshape(inputs, [batch_size * chunks_length, freq, num_channels])
+        inputs = self.freq_proj(inputs)
+        inputs = self.freq_pos_enc(inputs, training=training)
+        inputs = self.freq_transformer(inputs, training=training)
+        inputs = self.freq_linear(inputs)
+        inputs = self.freq_norm(inputs)
+        inputs = tf.reshape(inputs, [batch_size, chunks_length, freq, num_channels])
+        inputs = inputs + residual
 
-        x = self.depthwise_conv(inputs)
-        x = self.norm(x)
-        x = self.pointwise_conv1(x)
-        x = self.pointwise_conv2(x)
-        x = self.gamma * x
-        return x + residual
+        # time
+        inputs = tf.transpose(inputs, [0, 2, 1, 3])
+        residual = inputs
+        inputs = tf.reshape(inputs, [batch_size * freq, chunks_length, num_channels])
+        inputs = self.time_pos_enc(inputs, training=training)
+        inputs = self.time_transformer(inputs, training=training)
+        inputs = self.time_linear(inputs)
+        inputs = self.time_norm(inputs)
+        inputs = tf.reshape(inputs, [batch_size, freq, chunks_length, num_channels])
+        inputs = inputs + residual
 
-
-class ResidualConvModule2(tf.keras.layers.Layer):
-    def __init__(
-        self,
-        hidden_size,
-        kernel_size=3,
-        dilations=(1,),
-        activation="leakyrelu",
-        use_max_norm=False,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.hidden_size = hidden_size
-        self.conv_layers = []
-
-        for dilation in dilations:
-            self.conv_layers.append(
-                [
-                    get_activation_layer(activation),
-                    conv1d(
-                        hidden_size,
-                        kernel_size=kernel_size,
-                        dilation_rate=dilation,
-                        use_max_norm=use_max_norm,
-                    ),
-                    get_activation_layer(activation),
-                    conv1d(
-                        hidden_size,
-                        kernel_size=kernel_size,
-                        dilation_rate=1,
-                        use_max_norm=use_max_norm,
-                    ),
-                ]
-            )
-
-    def call(self, inputs, training=False):
-        for layer_set in self.conv_layers:
-            residual = inputs
-            for layer in layer_set:
-                inputs = layer(inputs, training=training)
-
-            inputs = residual + inputs
-        return inputs
-
-
-class MRFModule(tf.keras.layers.Layer):
-    def __init__(
-        self,
-        hidden_size,
-        kernel_sizes=(
-            3,
-            7,
-            11,
-        ),
-        dilations=(1, 3, 5),
-        activation="leakyrelu",
-        use_max_norm=False,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-
-        self.layer_blocks = []
-
-        for kernel_size in kernel_sizes:
-            self.layer_blocks += [
-                ResidualConvModule2(
-                    hidden_size,
-                    kernel_size=kernel_size,
-                    dilations=dilations,
-                    activation=activation,
-                    use_max_norm=use_max_norm,
-                ),
-            ]
-
-    def call(self, inputs, training=False):
-        output = None
-        for layer in self.layer_blocks:
-            layer_out = layer(inputs, training=training)
-
-            if output is None:
-                output = layer_out
-            else:
-                output += layer_out
-
-        output = output / len(self.layer_blocks)
-        return output
-
-
-class MISRModule(tf.keras.layers.Layer):
-    def __init__(
-        self,
-        hidden_size,
-        depth=3,
-        kernel_size=11,
-        dilations=(1, 3, 5),
-        activation="leakyrelu",
-        impl="fast",
-        use_max_norm=False,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-
-        self.depth = depth
-        self.channel_expansion_conv = dense(hidden_size * depth)
-        self.conv = ResidualConvModule2(
-            hidden_size,
-            kernel_size=kernel_size,
-            dilations=dilations,
-            activation=activation,
-            use_max_norm=use_max_norm,
-        )
-        self.channel_reduction_conv = dense(hidden_size)
-        self.impl = impl
-
-    def _native_impl(self, inputs, training):
-        inputs_list = tf.split(inputs, num_or_size_splits=self.depth, axis=-1)
-
-        block_list = []
-        for block in inputs_list:
-            block = self.conv(block, training=training)
-            block_list.append(block)
-
-        inputs = tf.concat(block_list, axis=-1)
-        return inputs
-
-    def _fast_impl(self, inputs, training):
-        inputs_split = tf.split(inputs, num_or_size_splits=self.depth, axis=-1)
-        inputs = tf.concat(inputs_split, axis=0)
-        inputs = self.conv(inputs, training=training)
-
-        inputs_split = tf.split(inputs, num_or_size_splits=self.depth, axis=0)
-        inputs = tf.concat(inputs_split, axis=-1)
-        return inputs
-
-    def call(self, inputs, training=False):
-        inputs = self.channel_expansion_conv(inputs)
-
-        if self.impl == "native":
-            inputs = self._native_impl(inputs, training=training)
-        elif self.impl == "fast":
-            inputs = self._fast_impl(inputs, training=training)
-
-        inputs = self.channel_reduction_conv(inputs)
+        inputs = tf.transpose(inputs, [0, 2, 1, 3])
         return inputs
 
 
 class Encoder(tf.keras.layers.Layer):
-    def __init__(self, hidden_size, **kwargs):
+    def __init__(
+        self,
+        hidden_size_list=[4, 32, 64, 128],
+        band_SR=[0.175, 0.392, 0.433],
+        band_strides=[1, 4, 16],
+        band_kernels=[3, 4, 16],
+        conv_depths=[3, 2, 1],
+        compress=4,
+        conv_kernel=3,
+        num_dual_path_blocks=4,
+        chunks_length=40,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
+        self.chunks_length = chunks_length
 
-        self.feature_extractor_1 = tf.keras.layers.Conv1D(
-            hidden_size, kernel_size=4, strides=2, padding="same", use_bias=False
-        )
-        self.feature_extractor_2 = tf.keras.layers.Conv1D(
-            hidden_size, kernel_size=4, strides=2, padding="same", use_bias=False
-        )
+        band_keys = ["low", "mid", "high"]
+        self.band_configs = {
+            band_keys[i]: {"SR": band_SR[i], "stride": band_strides[i], "kernel": band_kernels[i]}
+            for i in range(len(band_keys))
+        }
+        self.conv_config = {"compress": compress, "kernel": conv_kernel}
 
-        self.context_pos_enc = PositionalEncoding(hidden_size, dtype=tf.float32)
-        self.context_network = LatentTransformer(hidden_size=hidden_size, num_heads=8, num_layers=8)
+        self.sd_blocks = []
+        for index in range(len(hidden_size_list) - 1):
+            self.sd_blocks.append(
+                SDBlock(
+                    channels_out=hidden_size_list[index + 1],
+                    band_configs=self.band_configs,
+                    conv_config=self.conv_config,
+                    depths=conv_depths,
+                )
+            )
+
+        self.dual_path_layers = [
+            DualPathBlock(hidden_size_list[-1], chunks_length) for _ in range(num_dual_path_blocks)
+        ]
+
+    def _split(self, inputs, chunks_length):
+        batch_size = tf.shape(inputs)[0]
+        hop_size = chunks_length // 2
+        gap = (-tf.shape(inputs)[-2] - hop_size) % chunks_length
+
+        inputs = tf.pad(inputs, [[0, 0], [hop_size, hop_size + gap], [0, 0]], mode="constant")
+
+        # hop_size分ずらしたデータを分割
+        # 50%のオーバーラップを考慮
+        segment_1 = tf.reshape(inputs[:, :-hop_size], [batch_size, -1, chunks_length, inputs.shape[2]])
+        segment_2 = tf.reshape(inputs[:, hop_size:], [batch_size, -1, chunks_length, inputs.shape[2]])
+        inputs = tf.concat([segment_1, segment_2], axis=2)
+        inputs = tf.reshape(inputs, [batch_size, -1, chunks_length, inputs.shape[3]])
+        return inputs, gap
+
+    def _over_add(self, inputs, gap, chunks_length):
+        # inputs: (batch, segment_num, chunks_length, hidden_size)
+        batch_size = tf.shape(inputs)[0]
+        hop_size = chunks_length // 2
+        inputs = tf.reshape(inputs, [batch_size, -1, chunks_length * 2, inputs.shape[3]])
+
+        segment_1 = tf.reshape(inputs[:, :, :chunks_length], [batch_size, -1, inputs.shape[3]])
+        segment_2 = tf.reshape(inputs[:, :, chunks_length:], [batch_size, -1, inputs.shape[3]])
+        inputs = segment_1[:, hop_size:] + segment_2[:, :-hop_size]
+
+        if gap > 0:
+            inputs = inputs[:, :-gap]
+        return inputs
+
+    def _dual_path(self, inputs, training):
+        batch_size = tf.shape(inputs)[0]
+        time = tf.shape(inputs)[1]
+        freq = tf.shape(inputs)[2]
+        num_channels = tf.shape(inputs)[-1]
+
+        inputs = tf.transpose(inputs, [0, 3, 1, 2])
+        inputs = tf.reshape(inputs, [batch_size * num_channels, time, freq])
+        inputs, gap = self._split(inputs, self.chunks_length)
+
+        segment_num = tf.shape(inputs)[1]
+        inputs = tf.reshape(inputs, [batch_size, num_channels, segment_num, self.chunks_length, freq])
+        inputs = tf.transpose(inputs, [0, 2, 3, 4, 1])
+        inputs = tf.reshape(inputs, [batch_size * segment_num, self.chunks_length, freq, num_channels])
+
+        for layer in self.dual_path_layers:
+            inputs = layer(inputs, training=training)
+
+        inputs = tf.reshape(inputs, [batch_size, segment_num, self.chunks_length, freq, num_channels])
+        inputs = tf.transpose(inputs, [0, 4, 1, 2, 3])
+        inputs = tf.reshape(inputs, [batch_size * num_channels, segment_num, self.chunks_length, freq])
+
+        inputs = self._over_add(inputs, gap, self.chunks_length)
+        inputs = tf.reshape(inputs, [batch_size, num_channels, time, freq])
+        inputs = tf.transpose(inputs, [0, 2, 3, 1])
+        return inputs
 
     def call(self, inputs, training=False):
-        inputs = self.feature_extractor_1(inputs)
-        inputs = self.feature_extractor_2(inputs)
-        inputs = self.context_pos_enc(inputs, training=training)
-        inputs = self.context_network(inputs, training=training)
+        skip_list = []
+        lengths_list = []
+        original_lengths_list = []
 
-        return inputs
+        for sd_layer in self.sd_blocks:
+            inputs, skip, lengths, original_lengths = sd_layer(inputs, training=training)
+            skip_list.append(skip)
+            lengths_list.append(lengths)
+            original_lengths_list.append(original_lengths)
+
+        inputs = self._dual_path(inputs, training=training)
+        return inputs, skip_list[::-1], lengths_list[::-1], original_lengths_list[::-1]
 
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(
         self,
-        hidden_size,
-        strides,
-        module_type="misr",
-        decoder_activation="leakyrelu",
-        num_layers=1,
-        use_max_norm=False,
-        use_scaling=False,
-        scaling_loss_weight=1e-5,
+        hidden_size_list=[4, 32, 64, 128],
+        band_SR=[0.175, 0.392, 0.433],
+        band_strides=[1, 4, 16],
+        band_kernels=[3, 4, 16],
         **kwargs,
     ):
         super().__init__(**kwargs)
+        band_keys = ["low", "mid", "high"]
+        self.band_configs = {
+            band_keys[i]: {"SR": band_SR[i], "stride": band_strides[i], "kernel": band_kernels[i]}
+            for i in range(len(band_keys))
+        }
+        self.su_layers = []
+        for index in range(len(hidden_size_list) - 1):
+            self.su_layers.append(
+                (
+                    FusionLayer(channels=hidden_size_list[index + 1]),
+                    SULayer(channels_out=hidden_size_list[index], band_configs=self.band_configs),
+                )
+            )
 
-        self.layers = [
-            conv1d(hidden_size, kernel_size=7, use_max_norm=use_max_norm),
-            get_activation_layer(decoder_activation),
-        ]
+        self.su_layers = self.su_layers[::-1]
 
-        if use_scaling:
-            self.layers += [ScalingLayer(loss_weight=scaling_loss_weight, dtype=tf.float32)]
+    def call(self, inputs, skip_list, lengths_list, original_lengths_list, training=False):
+        for (fusion_layer, su_layer), skip, lengths, original_lengths in zip(
+            self.su_layers, skip_list, lengths_list, original_lengths_list
+        ):
+            inputs = fusion_layer(inputs, skip=skip, training=training)
+            inputs = su_layer(inputs, lengths=lengths, original_lengths=original_lengths, training=training)
 
-        for stride in strides:
-            self.layers += [
-                conv1dtranspose(
-                    hidden_size,
-                    kernel_size=2 * stride,
-                    strides=stride,
-                ),
-            ]
-
-            for _ in range(num_layers):
-                if use_scaling:
-                    self.layers += [ScalingLayer(loss_weight=scaling_loss_weight, dtype=tf.float32)]
-                if "misr" in module_type:
-                    impl = "native"
-                    if module_type == "misr_fast":
-                        impl = "fast"
-                    self.layers += [
-                        MISRModule(
-                            hidden_size,
-                            activation=decoder_activation,
-                            use_max_norm=use_max_norm,
-                            impl=impl,
-                        ),
-                    ]
-                elif module_type == "mrf":
-                    self.layers += [
-                        MRFModule(
-                            hidden_size,
-                            activation=decoder_activation,
-                            use_max_norm=use_max_norm,
-                        ),
-                    ]
-                elif module_type == "conv":
-                    self.layers += [
-                        ConvNeXtModule(hidden_size, activation=decoder_activation),
-                    ]
-                self.layers += [
-                    get_activation_layer(decoder_activation),
-                ]
-
-            hidden_size /= 2
-        if use_scaling:
-            self.layers += [ScalingLayer(loss_weight=scaling_loss_weight, dtype=tf.float32)]
-
-        self.layers += [dense(hidden_size * 4)]
-
-    def call(self, inputs, training=False):
-        for layer in self.layers:
-            inputs = layer(inputs, training=training)
-            # tf.print("decoder:", layer.name, " min:", tf.reduce_min(inputs), "max:", tf.reduce_max(inputs))
         return inputs
 
 
@@ -357,8 +284,13 @@ class AcousticEncoderModel(tf.keras.Model):
         super().__init__(**kwargs)
         self.config = config
 
-        self.encoder = Encoder(hidden_size=config.encoder_dim)
-        self.embedding_conv = conv1d(config.encoder_embedding_dim, kernel_size=7)
+        self.encoder = Encoder(
+            hidden_size_list=config.hidden_size_list,
+            band_SR=config.band_SR,
+            band_strides=config.band_strides,
+            band_kernels=config.band_kernels,
+            num_dual_path_blocks=config.num_dual_path_blocks,
+        )
         self.num_channels = config.num_channels
 
         self.stft_layer = STFT(
@@ -388,9 +320,6 @@ class AcousticEncoderModel(tf.keras.Model):
 
     def preprocess(self, signals):
         stft = self.stft_layer(signals, return_complex=True)
-        stft = tf.transpose(stft, [0, 1, 3, 2])
-        stft = einops.rearrange(stft, "b t c f -> b t (c f)")
-
         real = tf.math.real(stft)
         real = tf.where(tf.math.is_nan(real) | tf.math.is_inf(real), tf.zeros_like(real), real)
 
@@ -399,12 +328,9 @@ class AcousticEncoderModel(tf.keras.Model):
         return tf.concat([real, imag], axis=-1)
 
     def call(self, inputs, training=False):
-        original_dtype = inputs.dtype
-
         inputs = self.preprocess(inputs)
-        inputs = self.encoder(inputs, training=training)
-        inputs = tf.cast(inputs, dtype=original_dtype)
-        return inputs
+        inputs, skip_list, lengths_list, original_lengths_list = self.encoder(inputs, training=training)
+        return inputs, skip_list, lengths_list, original_lengths_list
 
 
 class AcousticModel(tf.keras.Model):
@@ -414,32 +340,16 @@ class AcousticModel(tf.keras.Model):
 
         self.encoder = AcousticEncoderModel(config)
         self.decoder = Decoder(
-            hidden_size=config.decoder_dim,
-            strides=config.decoder_strides,
-            module_type=config.decoder_module_type,
-            decoder_activation=config.decoder_activation,
-            num_layers=config.decoder_num_layers,
-            use_max_norm=config.decoder_use_max_norm,
-            use_scaling=config.decoder_use_scaling,
-            scaling_loss_weight=config.decoder_scaling_loss_weight,
+            hidden_size_list=config.hidden_size_list,
+            band_SR=config.band_SR,
+            band_strides=config.band_strides,
+            band_kernels=config.band_kernels,
         )
-
-        if config.inverse_mode == "stft":
-            self.last_conv = conv1d(
-                (config.istft_n_fft // 2 + 1) * 2 * config.num_channels,
-                kernel_size=7,
-                dtype=tf.float32,
-            )
-        elif config.inverse_mode == "wave":
-            self.last_conv = conv1d(config.num_channels, kernel_size=7, dtype=tf.float32)
-        else:
-            raise NotImplementedError("対応していないinvese_modeです")
 
         self.num_channels = config.num_channels
         self.istft_n_fft = config.istft_n_fft
         self.istft_hop_length = config.istft_hop_length
         self.istft_window_length = config.istft_window_length
-        self.inverse_mode = config.inverse_mode
         self.sampling_rate = config.sampling_rate
         self.phase_activation = config.phase_activation
 
@@ -461,23 +371,17 @@ class AcousticModel(tf.keras.Model):
         return model, intermediate_model
 
     def inverse(self, inputs, use_padding=False, seq_len=None):
-        inputs = self.last_conv(inputs)
-
-        if self.inverse_mode == "wave":
-            inputs = tf.clip_by_value(inputs, -1, 1)
-            return inputs
-
         if use_padding:
             crop_length = tf.cast(tf.math.ceil(seq_len / self.istft_hop_length), dtype=tf.int32)
             padding_num = tf.maximum(tf.shape(inputs)[1] - crop_length, 0)
-            inputs = tf.pad(inputs, [[0, 0], [0, padding_num], [0, 0]], mode="REFLECT")
+            inputs = tf.pad(inputs, [[0, 0], [0, padding_num], [0, 0], [0, 0]], mode="REFLECT")
             inputs = inputs[:, :crop_length]
+
         # 位相と振幅に分割
         split_inputs = tf.split(inputs, num_or_size_splits=2 * self.num_channels, axis=-1)
-
-        spec = tf.math.exp(tf.stack(split_inputs[: self.num_channels], axis=-1))
+        spec = tf.math.exp(tf.concat(split_inputs[: self.num_channels], axis=-1))
         spec = tf.clip_by_value(spec, spec, 1e3)  # nan回避
-        phase = tf.stack(split_inputs[self.num_channels :], axis=-1)
+        phase = tf.concat(split_inputs[self.num_channels :], axis=-1)
         if self.phase_activation == "sin":
             phase = tf.sin(phase)
 
@@ -488,14 +392,22 @@ class AcousticModel(tf.keras.Model):
             frame_step=self.istft_hop_length,
             fft_length=self.istft_n_fft,
         )
-        inputs = tf.clip_by_value(inputs, -1, 1)
+        inputs = tf.clip_by_value(inputs, -1.0, 1.0)
         return inputs
 
     def call(self, inputs, training=False):
         seq_len = tf.shape(inputs)[1]
 
-        inputs = self.encoder(inputs, training=training)
-        inputs = self.decoder(inputs, training=training)
+        inputs, skip_list, lengths_list, original_lengths_list = self.encoder(inputs, training=training)
+        # inputs: (batch, time, freq, channels)
+        inputs = self.decoder(
+            inputs,
+            skip_list=skip_list,
+            lengths_list=lengths_list,
+            original_lengths_list=original_lengths_list,
+            training=training,
+        )
+        inputs = tf.cast(inputs, dtype=tf.float32)
         inputs = self.inverse(inputs, use_padding=True, seq_len=seq_len)
         inputs = inputs[:, :seq_len]
 

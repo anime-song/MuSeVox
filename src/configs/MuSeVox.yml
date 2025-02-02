@@ -2,12 +2,12 @@ sampling_rate: 22050
 num_channels: 2
 n_mels: 160
 log_scale_input: true
-n_fft: 512
-window_length: 512
-hop_length: 128
-istft_n_fft: 64
-istft_window_length: 64
-istft_hop_length: 16
+n_fft: 2048
+window_length: 2048
+hop_length: 512
+istft_n_fft: 2048
+istft_window_length: 2048
+istft_hop_length: 512
 mel_loss_n_mels: [5, 10, 20, 40, 80, 160, 320,]
 mel_loss_window_length: [64, 128, 256, 512, 1024, 2048, 4096,]
 mel_loss_fmin: [0, 0, 0, 0, 0, 0, 0]
@@ -16,17 +16,12 @@ mel_loss_weights: [1, 1, 1, 1, 1, 1, 1]
 ##############################################################
 # generator
 ##############################################################
-encoder_dim: 512
-encoder_embedding_dim: 512
-decoder_dim: 1024
-decoder_num_layers: 1
-decoder_strides: [4, 4, 2]
-decoder_module_type: mrf
-decoder_activation: leakyrelu
-decoder_use_max_norm: false
-decoder_use_scaling: true
-decoder_scaling_loss_weight: 1.0e-03
-inverse_mode: stft
+num_layers: 8
+num_dual_path_blocks: 6
+hidden_size_list: [4, 32, 64, 128]
+band_SR: [0.175, 0.392, 0.433]
+band_strides: [1, 4, 16]
+band_kernels: [3, 4, 16]
 phase_activation: "null"
 
 ##############################################################
