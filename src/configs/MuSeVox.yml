@@ -1,13 +1,8 @@
 sampling_rate: 22050
 num_channels: 2
-n_mels: 160
-log_scale_input: true
 n_fft: 2048
 window_length: 2048
 hop_length: 512
-istft_n_fft: 2048
-istft_window_length: 2048
-istft_hop_length: 512
 mel_loss_n_mels: [5, 10, 20, 40, 80, 160, 320,]
 mel_loss_window_length: [64, 128, 256, 512, 1024, 2048, 4096,]
 mel_loss_fmin: [0, 0, 0, 0, 0, 0, 0]
@@ -16,7 +11,6 @@ mel_loss_weights: [1, 1, 1, 1, 1, 1, 1]
 ##############################################################
 # generator
 ##############################################################
-num_layers: 8
 num_dual_path_blocks: 6
 hidden_size_list: [4, 32, 64, 128]
 band_SR: [0.175, 0.392, 0.433]
@@ -40,17 +34,18 @@ epochs: 500
 batch_size: 4
 patch_len: 22050
 cache_size: 250
-mel_loss_weight: 4
+mel_loss_weight: 3
 feature_loss_weight: 2
 generator_loss_weight: 1
 discriminator_loss_type: "mse"
 log_dir: ./logs/
 mix_folder_path: "./Dataset/Processed"
 piano_folder_path: "./Dataset/Processed"
+instruments_folder_path: "./Dataset/Processed"
 model_save_freq: 10000
 epoch_max_steps: 10000
 learning_rate_warmup_steps: 0
 plot_interval_step: 10000
-discriminator_update_prob: 1.0
+discriminator_update_prob: 0.33
 discriminator_step_list: [400000, 1300000]
 generator_step_list: [400000, 1300000]

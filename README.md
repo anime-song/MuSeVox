@@ -11,14 +11,14 @@ To create a dataset for piano source separation, follow these steps:
 Use Demucs to perform source separation on your audio files. Run the following command to separate the audio into its components:
 
 ```bash
-MuSeVox>./src/preprocess/separate.py --audio_path <audio_path>
+MuSeVox>python ./src/preprocess/separate.py --audio_path <audio_path>
 ```
 Replace <audio_path> with the path to your input audio file.
 
 2. Mixing the Separated Sources
 After the sources (bass, vocals, drums) have been separated, mix them into a single audio file by running:
 ```bash
-MuSeVox>./src/preprocess/mix.py --input_folder <folder_with_separated_sources> --output_folder <output_folder> --sampling_rate 22050
+MuSeVox>python ./src/preprocess/mix.py --input_folder <folder_with_separated_sources> --output_folder <output_folder> --sampling_rate 22050
 ```
 Replace <folder_with_separated_sources> with the directory containing the separated audio files, and <output_folder> with the destination folder where the mixed audio will be saved.
 
@@ -37,7 +37,7 @@ Before proceeding, note that the mix_folder_path and piano_folder_path settings 
 Run the following command to convert the mixed audio files:
 
 ```bash
-MuSeVox>./src/preprocess/convert_wav.py --audio_file_path <folder_with_mixed_audio> --sampling_rate 22050 --source mix --dataset_path <dataset_save_path>
+MuSeVox>python ./src/preprocess/convert_wav.py --audio_file_path <folder_with_mixed_audio> --sampling_rate 22050 --source mix --dataset_path <dataset_save_path>
 ```
 
 - Replace <folder_with_mixed_audio> with the folder where the mixed audio files are stored.
@@ -47,7 +47,7 @@ MuSeVox>./src/preprocess/convert_wav.py --audio_file_path <folder_with_mixed_aud
 Run the following command to convert the piano audio files:
 
 ```bash
-MuSeVox>./src/preprocess/convert_wav.py --audio_file_path <folder_with_piano_audio> --sampling_rate 22050 --source piano --dataset_path <dataset_save_path>
+MuSeVox>python ./src/preprocess/convert_wav.py --audio_file_path <folder_with_piano_audio> --sampling_rate 22050 --source piano --dataset_path <dataset_save_path>
 ```
 
 - Replace <folder_with_piano_audio> with the folder where the piano audio files are stored.
@@ -62,7 +62,7 @@ Once the dataset has been prepared and converted to H5 files, you can start trai
 Run the following command:
 
 ```bash
-MuSeVox>./src/train.py --config ./src/configs/MuSeVox.yml
+MuSeVox>python ./src/train.py --config ./src/configs/MuSeVox.yml
 ```
 This command loads the configuration from MuSeVox.yml and begins the training process. Make sure that your dataset and configuration settings are correctly specified before starting training.
 
@@ -71,7 +71,7 @@ This command loads the configuration from MuSeVox.yml and begins the training pr
 Once the model has been trained (pretrained model weights will be released at a later date), you can run inference using the following command:
 
 ```bash
-MuSeVox>./src/predict.py --config ./src/configs/MuSeVox.yml --g_checkpoint_path <path_to_generator_weights>
+MuSeVox>python ./src/predict.py --config ./src/configs/MuSeVox.yml --g_checkpoint_path <path_to_generator_weights>
 ```
 
 - Replace <path_to_generator_weights> with the path to the saved Generator model weights.

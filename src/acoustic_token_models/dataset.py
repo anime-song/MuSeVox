@@ -130,8 +130,10 @@ class DataGeneratorBatch(keras.utils.Sequence):
         self,
         piano_files: list,
         mix_files: list,
+        instruments_files: list,
         dataset_piano,
         dataset_mix,
+        dataset_instruments,
         sampling_rate,
         batch_size=32,
         patch_length=128,
@@ -143,6 +145,7 @@ class DataGeneratorBatch(keras.utils.Sequence):
     ):
         print("piano files size:{}".format(len(piano_files)))
         print("mix files size:{}".format(len(mix_files)))
+        print("instruments files size:{}".format(len(instruments_files)))
 
         self.piano_dataloader = DataLoader(
             piano_files,
@@ -163,6 +166,17 @@ class DataGeneratorBatch(keras.utils.Sequence):
             cache_size=cache_size,
             num_threads=num_threads,
         )
+
+        if len(instruments_files) > 0:
+            self.instruments_dataloader = DataLoader(
+                instruments_files,
+                dataset_instruments,
+                sampling_rate=sampling_rate,
+                seq_len=patch_length,
+                max_queue=max_queue,
+                cache_size=cache_size,
+                num_threads=num_threads,
+            )
 
         self.batch_size = batch_size
         self.sampling_rate = sampling_rate
@@ -203,6 +217,18 @@ class DataGeneratorBatch(keras.utils.Sequence):
             PIANO[batch, :piano_nframes, 1] = piano_data[1] * piano_scale
             MIX[batch, :mix_nframes, 0] = mix_data[0] * other_scale
             MIX[batch, :mix_nframes, 1] = mix_data[1] * other_scale
+
+            # 楽器データを混ぜる
+            if self.instruments_dataloader is not None:
+                inst_data = self.instruments_dataloader.select_data()[0]
+                inst_scale = np.random.uniform(0.25, 1.25)
+                inst_nframes = inst_data.shape[1]
+                inst_data = inst_data * inst_scale
+                inst_data = inst_data[:, : min(inst_nframes, mix_nframes)]
+                MIX[batch, : inst_data.shape[1], 0] += inst_data[0]
+                MIX[batch, : inst_data.shape[1], 1] += inst_data[1]
+
+            MIX[batch] = np.clip(MIX[batch], -1, 1)
 
         return [PIANO, MIX], [PIANO, MIX]
 

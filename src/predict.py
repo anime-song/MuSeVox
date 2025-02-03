@@ -34,18 +34,18 @@ if len(y.shape) == 1:
 y = y.transpose(1, 0)
 y = y[np.newaxis, ...]
 
-separated_piano = intermediate_model(y).numpy()[0]
+separated = intermediate_model(y).numpy()[0]
+separated_piano = separated[0]
+separated_other = separated[1]
 
 # 元の音源とずれが発生するため、リサンプリングしてから保存
 separated_piano = librosa.resample(separated_piano.T, orig_sr=config.sampling_rate, target_sr=original_sr, scale=True).T
-min_length = min(orig_y.shape[1], separated_piano.shape[0])
-separated_other = orig_y.T[:min_length] - separated_piano[:min_length]
-
-os.makedirs("./audio_samples", exist_ok=True)
+separated_other = librosa.resample(separated_other.T, orig_sr=config.sampling_rate, target_sr=original_sr, scale=True).T
 
 separated_piano = postprocess_wav(separated_piano, config.sampling_rate, gain_db)
 separated_other = postprocess_wav(separated_other, config.sampling_rate, gain_db)
 
+os.makedirs("./audio_samples", exist_ok=True)
 separated_piano_audio = AudioSegment(
     (separated_piano * 32767).astype(np.int16).tobytes(),
     frame_rate=original_sr,

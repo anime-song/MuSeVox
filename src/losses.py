@@ -27,9 +27,7 @@ def inverse_stft(x, phase, frame_length, frame_step, fft_length):
 
 
 class STFT(tf.keras.layers.Layer):
-    def __init__(
-        self, frame_length, fft_length=None, frame_step=None, logscale=True, **kwargs
-    ):
+    def __init__(self, frame_length, fft_length=None, frame_step=None, logscale=True, **kwargs):
         super().__init__(**kwargs)
         self.frame_length = frame_length
         self.fft_length = fft_length
@@ -58,9 +56,7 @@ class STFT(tf.keras.layers.Layer):
             fft_length=self.fft_length,
             pad_end=use_padding,
         )
-        stft = tf.reshape(
-            stft, [batch_size, num_channels, tf.shape(stft)[-2], tf.shape(stft)[-1]]
-        )
+        stft = tf.reshape(stft, [batch_size, num_channels, tf.shape(stft)[-2], tf.shape(stft)[-1]])
         stft = tf.transpose(stft, [0, 2, 3, 1])
 
         if return_complex:
@@ -136,9 +132,7 @@ class MelSpectrogram(tf.keras.layers.Layer):
         if self.dbscale:
             mel_spectrogram = dbscale(mel_spectrogram)
         elif self.logscale:
-            mel_spectrogram = tf.math.log(
-                tf.clip_by_value(mel_spectrogram, 1e-9, mel_spectrogram)
-            )
+            mel_spectrogram = tf.math.log(tf.clip_by_value(mel_spectrogram, 1e-9, mel_spectrogram))
         mel_spectrogram = tf.reshape(
             mel_spectrogram,
             [
@@ -189,9 +183,7 @@ class MelSpectrogramLoss(tf.keras.layers.Layer):
                 logscale=logscale,
                 dtype=tf.float32,
             )
-            for n_mels, window_length, fmin, fmax in zip(
-                n_mels_list, window_length_list, fmin, fmax
-            )
+            for n_mels, window_length, fmin, fmax in zip(n_mels_list, window_length_list, fmin, fmax)
         ]
 
     def call(self, y, x):

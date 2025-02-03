@@ -49,8 +49,9 @@ class TensorboardCallback(tf.keras.callbacks.Callback):
             mix = self.x_data[1]
             piano_mix = piano + mix
 
-            separated_piano = self.base_model(piano_mix, training=False)
-            separated_other = piano_mix - separated_piano
+            separated = self.base_model(piano_mix, training=False)
+            separated_piano = separated[:, 0]
+            separated_other = separated[:, 1]
 
             _, piano_mel_inputs, piano_mel_preds = self.mel_func(piano, separated_piano)
             _, mix_mel_inputs, mix_mel_preds = self.mel_func(mix, separated_other)
@@ -244,8 +245,9 @@ class AcousticTokenTrainer:
             tf.GradientTape() as gen_tape,
             tf.GradientTape() as disc_tape,
         ):
-            separated_piano = self.generator(x_train_piano_mix, training=True)
-            separated_other = x_train_piano_mix - separated_piano
+            separated = self.generator(x_train_piano_mix, training=True)
+            separated_piano = separated[:, 0]
+            separated_other = separated[:, 1]
             g_fake = tf.concat([separated_piano, separated_other], axis=-1)
             g_real = tf.concat([x_train_piano, x_train_mix], axis=-1)
             fake_pred, fake_intermediates = self.discriminator(g_fake, training=True)
@@ -313,8 +315,9 @@ class AcousticTokenTrainer:
         x_test_mix = x_batch_test[1]
 
         x_test_piano_mix = x_test_piano + x_test_mix
-        separated_piano = self.generator(x_test_piano_mix, training=False)
-        separated_other = x_test_piano_mix - separated_piano
+        separated = self.generator(x_test_piano_mix, training=False)
+        separated_piano = separated[:, 0]
+        separated_other = separated[:, 1]
 
         mel_loss = self.mel_loss(x_test_piano, separated_piano) + self.mel_loss(x_test_mix, separated_other)
         piano_sdr = self.calculate_sdr(x_test_piano, separated_piano)
@@ -331,6 +334,7 @@ def get_dataset(
     sampling_rate,
     mix_folder_path,
     piano_folder_path,
+    instruments_folder_path,
 ):
     """
     Load and prepare the dataset for training and testing.
@@ -347,12 +351,17 @@ def get_dataset(
     """
     x_train_piano, x_test_piano, dataset_piano = load_from_npz(directory=piano_folder_path, group_name="piano")
     x_train_mix, x_test_mix, dataset_mix = load_from_npz(directory=mix_folder_path, group_name="mix")
+    x_train_instruments, x_test_instruments, dataset_instruments = load_from_npz(
+        directory=instruments_folder_path, group_name="instruments"
+    )
 
     train_gen = DataGeneratorBatch(
         piano_files=x_train_piano,
         mix_files=x_train_mix,
+        instruments_files=x_train_instruments,
         dataset_piano=dataset_piano,
         dataset_mix=dataset_mix,
+        dataset_instruments=dataset_instruments,
         sampling_rate=sampling_rate,
         patch_length=patch_len,
         initial_epoch=0,
@@ -365,8 +374,10 @@ def get_dataset(
     test_gen = DataGeneratorBatch(
         piano_files=x_test_piano,
         mix_files=x_test_mix,
+        instruments_files=x_test_instruments,
         dataset_piano=dataset_piano,
         dataset_mix=dataset_mix,
+        dataset_instruments=dataset_instruments,
         sampling_rate=sampling_rate,
         batch_size=batch_size,
         patch_length=patch_len,
@@ -377,8 +388,10 @@ def get_dataset(
     plot_gen = DataGeneratorBatch(
         piano_files=x_test_piano,
         mix_files=x_test_mix,
+        instruments_files=x_test_instruments,
         dataset_piano=dataset_piano,
         dataset_mix=dataset_mix,
+        dataset_instruments=dataset_instruments,
         sampling_rate=sampling_rate,
         batch_size=batch_size,
         patch_length=patch_len,
@@ -406,7 +419,7 @@ def train(
     # Callback
     monitor = "val_mel_loss"
     ckpt_callback_best = tf.keras.callbacks.ModelCheckpoint(
-        filepath="./model/muscssd_model-epoch_{epoch}_step_{batch}/generator.ckpt",
+        filepath="./model/musevox_model-epoch_{epoch}_step_{batch}/generator.ckpt",
         monitor=monitor,
         verbose=1,
         save_weights_only=True,
@@ -415,7 +428,7 @@ def train(
 
     discriminator_callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
-            filepath="./model/muscssd_model-epoch_{epoch}_step_{batch}/discriminator.ckpt",
+            filepath="./model/musevox_model-epoch_{epoch}_step_{batch}/discriminator.ckpt",
             monitor=monitor,
             verbose=1,
             save_weights_only=True,
@@ -431,16 +444,22 @@ def train(
         learning_rate=g_lr_schedule,
         beta_1=0.9,
         beta_2=0.95,
-        global_clipnorm=500,
-        weight_decay=0.01,
+        global_clipnorm=100,
+        weight_decay=0.04,
     )
     g_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(g_optimizer)
 
     initial_step = config.initial_step
     # 通常の訓練
     train_gen, test_gen, plot_gen = get_dataset(
-        config.batch_size, config.patch_len, config.cache_size, config.epoch_max_steps, config.sampling_rate,
-        config.mix_folder_path, config.piano_folder_path
+        config.batch_size,
+        config.patch_len,
+        config.cache_size,
+        config.epoch_max_steps,
+        config.sampling_rate,
+        config.mix_folder_path,
+        config.piano_folder_path,
+        config.instruments_folder_path,
     )
     mel_loss_func = MelSpectrogramLoss(
         config.mel_loss_n_mels,
@@ -471,8 +490,8 @@ def train(
         learning_rate=d_lr_schedule,
         beta_1=0.9,
         beta_2=0.95,
-        global_clipnorm=500,
-        weight_decay=0.01,
+        global_clipnorm=100,
+        weight_decay=0.04,
     )
     d_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(d_optimizer)
 

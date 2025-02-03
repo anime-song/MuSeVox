@@ -60,14 +60,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio_file_path", default="./Dataset/Source")
     parser.add_argument("--sampling_rate", default=22050)
-    parser.add_argument("--source", default="piano")
+    parser.add_argument("--source", choices=["piano", "mix", "instruments"])
     parser.add_argument("--dataset_path", default="./Dataset/Processed")
     args = parser.parse_args()
 
     if not os.path.exists(args.dataset_path):
         os.makedirs(args.dataset_path)
 
-    files = librosa.util.find_files(args.audio_file_path, ext=["mp3", "wav"], recurse=True)
+    files = librosa.util.find_files(args.audio_file_path, ext=["mp3", "wav", "flac"], recurse=True)
 
     new_files = []
     for file in files:

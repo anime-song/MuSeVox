@@ -238,6 +238,7 @@ class Encoder(tf.keras.layers.Layer):
             skip_list.append(skip)
             lengths_list.append(lengths)
             original_lengths_list.append(original_lengths)
+            # tf.print(tf.reduce_max(inputs), tf.reduce_min(inputs))
 
         inputs = self._dual_path(inputs, training=training)
         return inputs, skip_list[::-1], lengths_list[::-1], original_lengths_list[::-1]
@@ -250,6 +251,7 @@ class Decoder(tf.keras.layers.Layer):
         band_SR=[0.175, 0.392, 0.433],
         band_strides=[1, 4, 16],
         band_kernels=[3, 4, 16],
+        num_separate=2,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -263,7 +265,10 @@ class Decoder(tf.keras.layers.Layer):
             self.su_layers.append(
                 (
                     FusionLayer(channels=hidden_size_list[index + 1]),
-                    SULayer(channels_out=hidden_size_list[index], band_configs=self.band_configs),
+                    SULayer(
+                        channels_out=hidden_size_list[index] if index != 0 else hidden_size_list[index] * num_separate,
+                        band_configs=self.band_configs,
+                    ),
                 )
             )
 
@@ -275,6 +280,7 @@ class Decoder(tf.keras.layers.Layer):
         ):
             inputs = fusion_layer(inputs, skip=skip, training=training)
             inputs = su_layer(inputs, lengths=lengths, original_lengths=original_lengths, training=training)
+            # tf.print(tf.reduce_max(inputs), tf.reduce_min(inputs))
 
         return inputs
 
@@ -297,7 +303,6 @@ class AcousticEncoderModel(tf.keras.Model):
             frame_length=config.window_length,
             fft_length=config.n_fft,
             frame_step=config.hop_length,
-            logscale=config.log_scale_input,
             dtype=tf.float32,
         )
 
@@ -329,14 +334,19 @@ class AcousticEncoderModel(tf.keras.Model):
 
     def call(self, inputs, training=False):
         inputs = self.preprocess(inputs)
+        # inputs: (B, T, Fr, C)
+        mean = tf.reduce_mean(inputs, axis=[1, 2, 3], keepdims=True)
+        std = tf.math.reduce_std(inputs, axis=[1, 2, 3], keepdims=True)
+        inputs = (inputs - mean) / (std + 1e-5)
         inputs, skip_list, lengths_list, original_lengths_list = self.encoder(inputs, training=training)
-        return inputs, skip_list, lengths_list, original_lengths_list
+        return inputs, skip_list, lengths_list, original_lengths_list, (mean, std)
 
 
 class AcousticModel(tf.keras.Model):
     def __init__(self, config, **kwargs):
         super().__init__(**kwargs)
         self.config = config
+        self.num_separate = 2
 
         self.encoder = AcousticEncoderModel(config)
         self.decoder = Decoder(
@@ -344,12 +354,13 @@ class AcousticModel(tf.keras.Model):
             band_SR=config.band_SR,
             band_strides=config.band_strides,
             band_kernels=config.band_kernels,
+            num_separate=self.num_separate,
         )
 
         self.num_channels = config.num_channels
-        self.istft_n_fft = config.istft_n_fft
-        self.istft_hop_length = config.istft_hop_length
-        self.istft_window_length = config.istft_window_length
+        self.istft_n_fft = config.n_fft
+        self.istft_hop_length = config.hop_length
+        self.istft_window_length = config.window_length
         self.sampling_rate = config.sampling_rate
         self.phase_activation = config.phase_activation
 
@@ -371,6 +382,21 @@ class AcousticModel(tf.keras.Model):
         return model, intermediate_model
 
     def inverse(self, inputs, use_padding=False, seq_len=None):
+        B = tf.shape(inputs)[0]
+        T = tf.shape(inputs)[1]
+        F = tf.shape(inputs)[2]
+        C = tf.shape(inputs)[3]
+        # (B, T, F, C) -> (B, T, F, C // num_separate, num_separate)
+        inputs = tf.reshape(
+            inputs,
+            [B, T, F, C // self.num_separate, self.num_separate],
+        )
+        inputs = tf.transpose(inputs, [0, 4, 1, 2, 3])
+        inputs = tf.reshape(
+            inputs,
+            [B * self.num_separate, T, F, C // self.num_separate],
+        )
+
         if use_padding:
             crop_length = tf.cast(tf.math.ceil(seq_len / self.istft_hop_length), dtype=tf.int32)
             padding_num = tf.maximum(tf.shape(inputs)[1] - crop_length, 0)
@@ -393,12 +419,15 @@ class AcousticModel(tf.keras.Model):
             fft_length=self.istft_n_fft,
         )
         inputs = tf.clip_by_value(inputs, -1.0, 1.0)
+
+        inputs = tf.reshape(inputs, [B, self.num_separate, tf.shape(inputs)[1], tf.shape(inputs)[2]])
+        inputs = inputs[:, :, :seq_len]
         return inputs
 
     def call(self, inputs, training=False):
         seq_len = tf.shape(inputs)[1]
 
-        inputs, skip_list, lengths_list, original_lengths_list = self.encoder(inputs, training=training)
+        inputs, skip_list, lengths_list, original_lengths_list, (mean, std) = self.encoder(inputs, training=training)
         # inputs: (batch, time, freq, channels)
         inputs = self.decoder(
             inputs,
@@ -408,7 +437,6 @@ class AcousticModel(tf.keras.Model):
             training=training,
         )
         inputs = tf.cast(inputs, dtype=tf.float32)
+        inputs = inputs * std + mean
         inputs = self.inverse(inputs, use_padding=True, seq_len=seq_len)
-        inputs = inputs[:, :seq_len]
-
         return inputs
