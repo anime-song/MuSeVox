@@ -59,7 +59,7 @@ def create_dataset(files, sampling_rate, dataset_path, source):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio_file_path", default="./Dataset/Source")
-    parser.add_argument("--sampling_rate", default=22050)
+    parser.add_argument("--sampling_rate", default=44100)
     parser.add_argument("--source", choices=["piano", "mix", "instruments"])
     parser.add_argument("--dataset_path", default="./Dataset/Processed")
     args = parser.parse_args()

@@ -13,7 +13,7 @@ def preprocess_wav(y, sampling_rate, target_loudness=-24.0):
     return y.T, gain_db, gain_factor
 
 
-def postprocess_wav(y, sampling_rate, gain_db):
+def postprocess_wav(y, gain_db):
     inverse_gain_factor = 10 ** (-gain_db / 20)
     return np.clip(y * inverse_gain_factor, -1.0, 1.0)
 

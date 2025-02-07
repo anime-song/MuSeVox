@@ -39,7 +39,7 @@ class DataLoader:
         dataset,
         seq_len,
         sampling_rate,
-        max_sample_length=300,
+        max_sample_length=3600,
         max_queue=1,
         cache_size=100,
         num_threads=1,

@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from losses import STFT, inverse_stft
+from losses import STFT, inverse_stft_complex
 from model_utils import (
     RMSNorm,
     Snake,
@@ -89,13 +89,13 @@ class DualPathBlock(tf.keras.layers.Layer):
         super().__init__(**kwargs)
 
         self.hidden_size = hidden_size
-        self.time_pos_enc = PositionalEncoding(hidden_size, dtype=tf.float32)
+        self.time_pos_enc = PositionalEncoding(hidden_size, max_shift_size=40, dtype=tf.float32)
         self.time_transformer = LatentTransformer(hidden_size, num_layers=1)
         self.time_linear = tf.keras.layers.Dense(hidden_size)
         self.time_norm = RMSNorm()
 
         self.freq_proj = tf.keras.layers.Dense(hidden_size)
-        self.freq_pos_enc = PositionalEncoding(hidden_size, dtype=tf.float32)
+        self.freq_pos_enc = PositionalEncoding(hidden_size, max_shift_size=40, dtype=tf.float32)
         self.freq_transformer = LatentTransformer(hidden_size, num_layers=1)
         self.freq_linear = tf.keras.layers.Dense(hidden_size)
         self.freq_norm = RMSNorm()
@@ -172,62 +172,6 @@ class Encoder(tf.keras.layers.Layer):
             DualPathBlock(hidden_size_list[-1], chunks_length) for _ in range(num_dual_path_blocks)
         ]
 
-    def _split(self, inputs, chunks_length):
-        batch_size = tf.shape(inputs)[0]
-        hop_size = chunks_length // 2
-        gap = (-tf.shape(inputs)[-2] - hop_size) % chunks_length
-
-        inputs = tf.pad(inputs, [[0, 0], [hop_size, hop_size + gap], [0, 0]], mode="constant")
-
-        # hop_size分ずらしたデータを分割
-        # 50%のオーバーラップを考慮
-        segment_1 = tf.reshape(inputs[:, :-hop_size], [batch_size, -1, chunks_length, inputs.shape[2]])
-        segment_2 = tf.reshape(inputs[:, hop_size:], [batch_size, -1, chunks_length, inputs.shape[2]])
-        inputs = tf.concat([segment_1, segment_2], axis=2)
-        inputs = tf.reshape(inputs, [batch_size, -1, chunks_length, inputs.shape[3]])
-        return inputs, gap
-
-    def _over_add(self, inputs, gap, chunks_length):
-        # inputs: (batch, segment_num, chunks_length, hidden_size)
-        batch_size = tf.shape(inputs)[0]
-        hop_size = chunks_length // 2
-        inputs = tf.reshape(inputs, [batch_size, -1, chunks_length * 2, inputs.shape[3]])
-
-        segment_1 = tf.reshape(inputs[:, :, :chunks_length], [batch_size, -1, inputs.shape[3]])
-        segment_2 = tf.reshape(inputs[:, :, chunks_length:], [batch_size, -1, inputs.shape[3]])
-        inputs = segment_1[:, hop_size:] + segment_2[:, :-hop_size]
-
-        if gap > 0:
-            inputs = inputs[:, :-gap]
-        return inputs
-
-    def _dual_path(self, inputs, training):
-        batch_size = tf.shape(inputs)[0]
-        time = tf.shape(inputs)[1]
-        freq = tf.shape(inputs)[2]
-        num_channels = tf.shape(inputs)[-1]
-
-        inputs = tf.transpose(inputs, [0, 3, 1, 2])
-        inputs = tf.reshape(inputs, [batch_size * num_channels, time, freq])
-        inputs, gap = self._split(inputs, self.chunks_length)
-
-        segment_num = tf.shape(inputs)[1]
-        inputs = tf.reshape(inputs, [batch_size, num_channels, segment_num, self.chunks_length, freq])
-        inputs = tf.transpose(inputs, [0, 2, 3, 4, 1])
-        inputs = tf.reshape(inputs, [batch_size * segment_num, self.chunks_length, freq, num_channels])
-
-        for layer in self.dual_path_layers:
-            inputs = layer(inputs, training=training)
-
-        inputs = tf.reshape(inputs, [batch_size, segment_num, self.chunks_length, freq, num_channels])
-        inputs = tf.transpose(inputs, [0, 4, 1, 2, 3])
-        inputs = tf.reshape(inputs, [batch_size * num_channels, segment_num, self.chunks_length, freq])
-
-        inputs = self._over_add(inputs, gap, self.chunks_length)
-        inputs = tf.reshape(inputs, [batch_size, num_channels, time, freq])
-        inputs = tf.transpose(inputs, [0, 2, 3, 1])
-        return inputs
-
     def call(self, inputs, training=False):
         skip_list = []
         lengths_list = []
@@ -238,9 +182,9 @@ class Encoder(tf.keras.layers.Layer):
             skip_list.append(skip)
             lengths_list.append(lengths)
             original_lengths_list.append(original_lengths)
-            # tf.print(tf.reduce_max(inputs), tf.reduce_min(inputs))
 
-        inputs = self._dual_path(inputs, training=training)
+        for layer in self.dual_path_layers:
+            inputs = layer(inputs, training=training)
         return inputs, skip_list[::-1], lengths_list[::-1], original_lengths_list[::-1]
 
 
@@ -280,7 +224,6 @@ class Decoder(tf.keras.layers.Layer):
         ):
             inputs = fusion_layer(inputs, skip=skip, training=training)
             inputs = su_layer(inputs, lengths=lengths, original_lengths=original_lengths, training=training)
-            # tf.print(tf.reduce_max(inputs), tf.reduce_min(inputs))
 
         return inputs
 
@@ -362,7 +305,6 @@ class AcousticModel(tf.keras.Model):
         self.istft_hop_length = config.hop_length
         self.istft_window_length = config.window_length
         self.sampling_rate = config.sampling_rate
-        self.phase_activation = config.phase_activation
 
     @classmethod
     def from_pretrain(
@@ -403,23 +345,17 @@ class AcousticModel(tf.keras.Model):
             inputs = tf.pad(inputs, [[0, 0], [0, padding_num], [0, 0], [0, 0]], mode="REFLECT")
             inputs = inputs[:, :crop_length]
 
-        # 位相と振幅に分割
+        # vocoderで使われる位相・振幅予測では安定性が低いため、complexを直接予測する
         split_inputs = tf.split(inputs, num_or_size_splits=2 * self.num_channels, axis=-1)
-        spec = tf.math.exp(tf.concat(split_inputs[: self.num_channels], axis=-1))
-        spec = tf.clip_by_value(spec, spec, 1e3)  # nan回避
-        phase = tf.concat(split_inputs[self.num_channels :], axis=-1)
-        if self.phase_activation == "sin":
-            phase = tf.sin(phase)
+        real = tf.concat(split_inputs[: self.num_channels], axis=-1)
+        imag = tf.concat(split_inputs[self.num_channels :], axis=-1)
 
-        inputs = inverse_stft(
-            spec,
-            phase,
+        inputs = inverse_stft_complex(
+            tf.complex(real, imag),
             frame_length=self.istft_window_length,
             frame_step=self.istft_hop_length,
             fft_length=self.istft_n_fft,
         )
-        inputs = tf.clip_by_value(inputs, -1.0, 1.0)
-
         inputs = tf.reshape(inputs, [B, self.num_separate, tf.shape(inputs)[1], tf.shape(inputs)[2]])
         inputs = inputs[:, :, :seq_len]
         return inputs

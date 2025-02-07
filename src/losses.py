@@ -20,7 +20,17 @@ def inverse_stft(x, phase, frame_length, frame_step, fft_length):
         frame_length=frame_length,
         frame_step=frame_step,
         fft_length=fft_length,
-        window_fn=tf.signal.inverse_stft_window_fn(frame_step),
+    )
+    x = tf.transpose(x, [1, 2, 0])
+    return x
+
+
+def inverse_stft_complex(spec, frame_length, frame_step, fft_length):
+    x = tf.signal.inverse_stft(
+        tf.transpose(spec, [3, 0, 1, 2]),
+        frame_length=frame_length,
+        frame_step=frame_step,
+        fft_length=fft_length,
     )
     x = tf.transpose(x, [1, 2, 0])
     return x
@@ -67,6 +77,29 @@ class STFT(tf.keras.layers.Layer):
             mag = tf.math.log(tf.clip_by_value(mag, 1e-5, 1e3))
         phase = tf.math.angle(stft)
         return mag, phase
+
+
+class STFTLoss(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        frame_length,
+        fft_length=None,
+        frame_step=None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.stft_layer = STFT(
+            frame_length=frame_length, fft_length=fft_length, frame_step=frame_step, dtype=tf.float32
+        )
+
+    def call(self, y, x):
+        y_stft = self.stft_layer(y, return_complex=True)
+        y_stft = tf.concat([tf.math.real(y_stft), tf.math.imag(y_stft)], axis=-1)
+        x_stft = self.stft_layer(x, return_complex=True)
+        x_stft = tf.concat([tf.math.real(x_stft), tf.math.imag(x_stft)], axis=-1)
+
+        total_loss = tf.sqrt(tf.reduce_mean(tf.square(y_stft - x_stft)))
+        return total_loss
 
 
 class MelSpectrogram(tf.keras.layers.Layer):

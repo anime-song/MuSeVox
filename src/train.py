@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 
 from acoustic_token_models.dataset import DataGeneratorBatch, load_from_npz
 from util import allocate_gpu_memory, minmax
-from losses import MelSpectrogramLoss
+from losses import STFTLoss
 from acoustic_token_models.acoustic_token_model import AcousticModel
 from acoustic_token_models.discriminator import Discriminator
 
@@ -24,7 +24,6 @@ class TensorboardCallback(tf.keras.callbacks.Callback):
         period=1,
         sample_period=1,
         initial_step=0,
-        mel_func=None,
     ):
         self.summary_writer = tf.summary.create_file_writer(log_dir, max_queue=100)
         self.period = period
@@ -36,53 +35,12 @@ class TensorboardCallback(tf.keras.callbacks.Callback):
         self.x_data, self.y_data = test_data.__getitem__(0)
         self.sampling_rate = sampling_rate
         self.first_call = True
-        self.mel_func = mel_func
 
     def on_train_batch_end(self, batch, logs=None):
         if logs:
             for key, value in logs.items():
                 with self.summary_writer.as_default():
                     tf.summary.scalar(key, value, step=self.current_steps)
-
-        if self.current_steps % self.sample_period == 0:
-            piano = self.x_data[0]
-            mix = self.x_data[1]
-            piano_mix = piano + mix
-
-            separated = self.base_model(piano_mix, training=False)
-            separated_piano = separated[:, 0]
-            separated_other = separated[:, 1]
-
-            _, piano_mel_inputs, piano_mel_preds = self.mel_func(piano, separated_piano)
-            _, mix_mel_inputs, mix_mel_preds = self.mel_func(mix, separated_other)
-
-            if self.first_call:
-                cv2.imwrite(
-                    "./img/orig_piano.png",
-                    cv2.flip(
-                        minmax(piano_mel_inputs[-1].numpy()[0, :, :, 0].transpose(1, 0)),
-                        0,
-                    )
-                    * 255,
-                )
-                cv2.imwrite(
-                    "./img/orig_other.png",
-                    cv2.flip(
-                        minmax(mix_mel_inputs[-1].numpy()[0, :, :, 0].transpose(1, 0)),
-                        0,
-                    )
-                    * 255,
-                )
-                self.first_call = False
-
-            cv2.imwrite(
-                "./img/separated_piano_{}.png".format(self.current_steps),
-                cv2.flip(minmax(piano_mel_preds[-1].numpy()[0, :, :, 0].transpose(1, 0)), 0) * 255,
-            )
-            cv2.imwrite(
-                "./img/separated_mix_{}.png".format(self.current_steps),
-                cv2.flip(minmax(mix_mel_preds[-1].numpy()[0, :, :, 0].transpose(1, 0)), 0) * 255,
-            )
 
         self.current_steps += 1
 
@@ -105,7 +63,7 @@ class AcousticTokenTrainer:
         discriminator_optimizer: tf.keras.optimizers.Optimizer,
         callbacks: list,
         discriminator_callbacks: list,
-        mel_loss_weight: float = 1.0,
+        spec_loss_weight: float = 1.0,
         feature_loss_weight: float = 3.0,
         generator_loss_weight: float = 3.0,
         mrd_loss_weight: float = 0.1,
@@ -135,11 +93,11 @@ class AcousticTokenTrainer:
             model=self.discriminator,
         )
         self.epochs = epochs
-        self.mel_loss_weight = mel_loss_weight
+        self.spec_loss_weight = spec_loss_weight
         self.feature_loss_weight = feature_loss_weight
         self.generator_loss_weight = generator_loss_weight
         self.mrd_loss_weight = mrd_loss_weight
-        self.current_step = initial_step
+        self.current_step = tf.Variable(initial_step, trainable=False, dtype=tf.int64)
         self.initial_epoch = initial_epoch
         self.warmup = warmup
         self.discriminator_update_prob = discriminator_update_prob
@@ -174,9 +132,9 @@ class AcousticTokenTrainer:
         ]
         return tf.reduce_sum(losses)
 
-    def mel_loss(self, original_inputs, inputs):
-        mel_loss, _, _ = self.loss_func(original_inputs, inputs)
-        return mel_loss
+    def spec_loss(self, original_inputs, inputs):
+        spec_loss = self.loss_func(original_inputs, inputs)
+        return spec_loss
 
     def calculate_sdr(self, s_true, s_estimated):
         def log10(inputs):
@@ -213,7 +171,7 @@ class AcousticTokenTrainer:
 
                 self.callbacks.on_train_batch_end(i, logs=logs)
                 self.discriminator_callbacks.on_train_batch_end(i, logs=logs)
-                self.current_step += 1
+                self.current_step.assign_add(1)
 
             # test step
             for i, input_data in enumerate(test_gen):
@@ -240,7 +198,6 @@ class AcousticTokenTrainer:
 
         x_train_piano_mix = x_train_piano + x_train_mix
 
-        # Discriminatorのトレーニング
         with (
             tf.GradientTape() as gen_tape,
             tf.GradientTape() as disc_tape,
@@ -248,8 +205,10 @@ class AcousticTokenTrainer:
             separated = self.generator(x_train_piano_mix, training=True)
             separated_piano = separated[:, 0]
             separated_other = separated[:, 1]
-            g_fake = tf.concat([separated_piano, separated_other], axis=-1)
-            g_real = tf.concat([x_train_piano, x_train_mix], axis=-1)
+
+            g_fake = separated_piano
+            g_real = x_train_piano
+
             fake_pred, fake_intermediates = self.discriminator(g_fake, training=True)
             real_pred, real_intermediates = self.discriminator(g_real, training=True)
 
@@ -269,16 +228,16 @@ class AcousticTokenTrainer:
             g_loss = (
                 self.generator_loss(fake_pred["mpd"]) + self.generator_loss(fake_pred["mrd"]) * self.mrd_loss_weight
             )
-            mel_loss = self.mel_loss(x_train_piano, separated_piano) + self.mel_loss(x_train_mix, separated_other)
-            scaling_loss = tf.reduce_sum(self.generator.losses)
+            piano_spec_loss = self.spec_loss(x_train_piano, separated_piano)
+            other_spec_loss = self.spec_loss(x_train_mix, separated_other)
             piano_sdr = self.calculate_sdr(x_train_piano, separated_piano)
             other_sdr = self.calculate_sdr(x_train_mix, separated_other)
 
             total_generator_loss = (
-                mel_loss * self.mel_loss_weight
+                piano_spec_loss * self.spec_loss_weight
+                + other_spec_loss * self.spec_loss_weight
                 + g_loss * self.generator_loss_weight
                 + feature_loss * self.feature_loss_weight
-                + scaling_loss
             )
             total_generator_loss = self.generator_optimizer.get_scaled_loss(total_generator_loss)
 
@@ -301,8 +260,8 @@ class AcousticTokenTrainer:
             "g_loss": g_loss,
             "feature_loss_mpd": mpd_feature_loss,
             "feature_loss_mrd": mrd_feature_loss,
-            "mel_loss": mel_loss,
-            "g_scaling_loss": scaling_loss,
+            "piano_spec_loss": piano_spec_loss,
+            "other_spec_loss": other_spec_loss,
             "piano_sdr": piano_sdr,
             "other_sdr": other_sdr,
         }
@@ -319,11 +278,17 @@ class AcousticTokenTrainer:
         separated_piano = separated[:, 0]
         separated_other = separated[:, 1]
 
-        mel_loss = self.mel_loss(x_test_piano, separated_piano) + self.mel_loss(x_test_mix, separated_other)
+        piano_spec_loss = self.spec_loss(x_test_piano, separated_piano)
+        other_spec_loss = self.spec_loss(x_test_mix, separated_other)
         piano_sdr = self.calculate_sdr(x_test_piano, separated_piano)
         other_sdr = self.calculate_sdr(x_test_mix, separated_other)
 
-        return {"val_mel_loss": mel_loss, "val_piano_sdr": piano_sdr, "val_other_sdr": other_sdr}
+        return {
+            "val_piano_spec_loss": piano_spec_loss,
+            "val_other_spec_loss": other_spec_loss,
+            "val_piano_sdr": piano_sdr,
+            "val_other_sdr": other_sdr,
+        }
 
 
 def get_dataset(
@@ -417,7 +382,7 @@ def train(
     disc_model, _ = Discriminator.from_pretrain(config=config, model_weight_path=discriminator_model_weight_path)
 
     # Callback
-    monitor = "val_mel_loss"
+    monitor = "val_piano_spec_loss"
     ckpt_callback_best = tf.keras.callbacks.ModelCheckpoint(
         filepath="./model/musevox_model-epoch_{epoch}_step_{batch}/generator.ckpt",
         monitor=monitor,
@@ -444,8 +409,8 @@ def train(
         learning_rate=g_lr_schedule,
         beta_1=0.9,
         beta_2=0.95,
-        global_clipnorm=100,
-        weight_decay=0.04,
+        global_clipnorm=500,
+        weight_decay=0.01,
     )
     g_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(g_optimizer)
 
@@ -461,13 +426,10 @@ def train(
         config.piano_folder_path,
         config.instruments_folder_path,
     )
-    mel_loss_func = MelSpectrogramLoss(
-        config.mel_loss_n_mels,
-        config.mel_loss_window_length,
-        config.sampling_rate,
-        fmin=config.mel_loss_fmin,
-        fmax=config.mel_loss_fmax,
-        loss_weights=config.mel_loss_weights,
+    loss_func = STFTLoss(
+        frame_length=config.window_length,
+        fft_length=config.n_fft,
+        frame_step=config.hop_length,
         dtype=tf.float32,
     )
 
@@ -481,7 +443,6 @@ def train(
         period=10,
         sample_period=config.plot_interval_step,
         initial_step=initial_step,
-        mel_func=mel_loss_func,
     )
     d_lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
         1e-4, decay_steps=1, decay_rate=0.999999, staircase=False
@@ -490,8 +451,8 @@ def train(
         learning_rate=d_lr_schedule,
         beta_1=0.9,
         beta_2=0.95,
-        global_clipnorm=100,
-        weight_decay=0.04,
+        global_clipnorm=500,
+        weight_decay=0.01,
     )
     d_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(d_optimizer)
 
@@ -508,7 +469,7 @@ def train(
             tensorboard_callback,
         ],
         discriminator_callbacks=discriminator_callbacks,
-        mel_loss_weight=config.mel_loss_weight,
+        spec_loss_weight=config.spec_loss_weight,
         feature_loss_weight=config.feature_loss_weight,
         generator_loss_weight=config.generator_loss_weight,
         mrd_loss_weight=config.mrd_loss_weight,
@@ -517,7 +478,7 @@ def train(
         discriminator_update_prob=config.discriminator_update_prob,
         initial_epoch=initial_step // config.epoch_max_steps,
         discriminator_loss_type=config.discriminator_loss_type,
-        loss_func=mel_loss_func,
+        loss_func=loss_func,
     ).train(train_gen, test_gen)
 
 

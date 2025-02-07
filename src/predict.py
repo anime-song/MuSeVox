@@ -42,8 +42,8 @@ separated_other = separated[1]
 separated_piano = librosa.resample(separated_piano.T, orig_sr=config.sampling_rate, target_sr=original_sr, scale=True).T
 separated_other = librosa.resample(separated_other.T, orig_sr=config.sampling_rate, target_sr=original_sr, scale=True).T
 
-separated_piano = postprocess_wav(separated_piano, config.sampling_rate, gain_db)
-separated_other = postprocess_wav(separated_other, config.sampling_rate, gain_db)
+separated_piano = postprocess_wav(separated_piano, gain_db)
+separated_other = postprocess_wav(separated_other, gain_db)
 
 os.makedirs("./audio_samples", exist_ok=True)
 separated_piano_audio = AudioSegment(

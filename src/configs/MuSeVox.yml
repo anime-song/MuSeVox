@@ -1,22 +1,16 @@
-sampling_rate: 22050
+sampling_rate: 44100
 num_channels: 2
-n_fft: 2048
-window_length: 2048
-hop_length: 512
-mel_loss_n_mels: [5, 10, 20, 40, 80, 160, 320,]
-mel_loss_window_length: [64, 128, 256, 512, 1024, 2048, 4096,]
-mel_loss_fmin: [0, 0, 0, 0, 0, 0, 0]
-mel_loss_fmax: [null, null, null, null, null, null, null]
-mel_loss_weights: [1, 1, 1, 1, 1, 1, 1]
+n_fft: 4096
+window_length: 4096
+hop_length: 1024
 ##############################################################
 # generator
 ##############################################################
 num_dual_path_blocks: 6
 hidden_size_list: [4, 32, 64, 128]
-band_SR: [0.175, 0.392, 0.433]
+band_SR: [0.225, 0.372, 0.403]
 band_strides: [1, 4, 16]
 band_kernels: [3, 4, 16]
-phase_activation: "null"
 
 ##############################################################
 # Discriminator
@@ -30,11 +24,11 @@ discriminator_activation: leakyrelu
 # training
 ##############################################################
 initial_step: 0
-epochs: 500
+epochs: 200
 batch_size: 4
-patch_len: 22050
+patch_len: 44100 # 44100
 cache_size: 250
-mel_loss_weight: 3
+spec_loss_weight: 20
 feature_loss_weight: 2
 generator_loss_weight: 1
 discriminator_loss_type: "mse"

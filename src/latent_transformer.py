@@ -6,9 +6,7 @@ class FeedForwardModule(tf.keras.layers.Layer):
     def __init__(self, hidden_size, expansion_rate=4, dropout=0.1, **kwargs):
         super().__init__(**kwargs)
         self.norm_1 = tf.keras.layers.LayerNormalization()
-        self.dense_1 = tf.keras.layers.Dense(
-            hidden_size * expansion_rate, use_bias=False
-        )
+        self.dense_1 = tf.keras.layers.Dense(hidden_size * expansion_rate, use_bias=False)
         self.activation_1 = tf.keras.layers.Activation("swish")
         self.dropout_1 = tf.keras.layers.Dropout(dropout)
         self.dense_2 = tf.keras.layers.Dense(hidden_size, use_bias=False)
@@ -30,18 +28,12 @@ class FeedForwardModule(tf.keras.layers.Layer):
 
 
 class ConvModule(tf.keras.layers.Layer):
-    def __init__(
-        self, hidden_size, expansion_rate=2, kernel_size=32, dropout=0.1, **kwargs
-    ):
+    def __init__(self, hidden_size, expansion_rate=2, kernel_size=32, dropout=0.1, **kwargs):
         super().__init__(**kwargs)
         self.norm_1 = tf.keras.layers.LayerNormalization()
-        self.pointwise_conv_1 = tf.keras.layers.Dense(
-            hidden_size * expansion_rate, use_bias=False
-        )
+        self.pointwise_conv_1 = tf.keras.layers.Dense(hidden_size * expansion_rate, use_bias=False)
         self.activation_1 = GLU()
-        self.depth_conv_1 = tf.keras.layers.DepthwiseConv1D(
-            kernel_size=kernel_size, use_bias=False, padding="same"
-        )
+        self.depth_conv_1 = tf.keras.layers.DepthwiseConv1D(kernel_size=kernel_size, use_bias=False, padding="same")
         self.norm_2 = tf.keras.layers.BatchNormalization()
         self.activation_2 = tf.keras.layers.Activation("swish")
         self.pointwise_conv_2 = tf.keras.layers.Dense(hidden_size, use_bias=False)
@@ -151,9 +143,7 @@ class LatentTransformerLayer(tf.keras.layers.Layer):
         self.layer_norm_eps = layer_norm_eps
         self.dropout = dropout
 
-        self.attention_layer = LatentAttention(
-            latent_dim, self.hidden_size, num_heads=self.num_heads
-        )
+        self.attention_layer = LatentAttention(latent_dim, self.hidden_size, num_heads=self.num_heads)
         self.ffn = tf.keras.Sequential(
             [
                 tf.keras.layers.Dense(hidden_size * 2),

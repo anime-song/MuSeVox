@@ -242,7 +242,7 @@ class Discriminator(tf.keras.layers.Layer):
 
     @classmethod
     def from_pretrain(cls, config, model_weight_path=None):
-        model_input = tf.keras.layers.Input(shape=(None, config.num_channels * 2))
+        model_input = tf.keras.layers.Input(shape=(None, config.num_channels))
 
         intermediate_model = cls(config)
         outputs = intermediate_model(model_input)
@@ -253,17 +253,7 @@ class Discriminator(tf.keras.layers.Layer):
 
         return model, intermediate_model
 
-    def preprocess(self, y):
-        # Remove DC offset
-        y = y - tf.reduce_mean(y, axis=1, keepdims=True)
-
-        # Peak normalize the volume of input audio
-        max_val = tf.reduce_max(tf.abs(y), axis=1, keepdims=True)
-        y = 0.8 * y / (max_val + 1e-9)
-        return y
-
     def call(self, inputs, training=False):
-        inputs = self.preprocess(inputs)
         mpd_outputs = []
         mpd_intermediate_layers = []
         for discriminator in self.mpd_layers:

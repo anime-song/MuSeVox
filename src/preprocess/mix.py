@@ -19,7 +19,7 @@ parser.add_argument(
 parser.add_argument(
     "--sampling_rate",
     type=int,
-    default=22050,
+    default=44100,
     help="Sampling rate for loading audio files.",
 )
 args = parser.parse_args()
