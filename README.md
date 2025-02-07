@@ -25,7 +25,8 @@ Replace <folder_with_separated_sources> with the directory containing the separa
 Following these steps will generate the mixed audio dataset required for training the MuSeVox model.
 
 ## Piano Audio Creation
-Next, we prepare the piano audio that will be used for source separation. Please note that this repository does not support the generation or creation of piano audio. Instead, we rely on audio extracted from YouTube using the YouTube IDs provided in the [PIAST](https://hayeonbang.github.io/PIAST_dataset/) dataset. This dataset serves as the source for the piano audio used in the experiments.
+Next, we prepare the piano audio that will be used for source separation. Please note that this repository does not support the generation or creation of piano audio. Instead, we rely on audio rendered from MIDI files provided in the [PIAST](https://hayeonbang.github.io/PIAST_dataset/) dataset. This rendering process is necessary because the YouTube audio contained in the PIAST dataset sometimes includes sound sources other than the piano. By rendering from MIDI files, we ensure that the audio consists solely of piano sounds, which is crucial for accurate source separation.
+
 
 ## Converting Audio Files to H5 Format
 To prepare the audio for training, the generated audio files need to be converted into H5 format using the provided script. This conversion is performed separately for the mixed audio and the piano audio.
