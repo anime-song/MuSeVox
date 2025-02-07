@@ -1,5 +1,5 @@
 # MuSeVox Music Source Separation
-MuSeVox is a music source separation model inspired by the concept of vocoders. The input audio signal is first converted into a spectrogram, after which features are extracted using a Transformer. The extracted features are then reconstructed into an audio signal by a Decoder, and mel spectrogram losses at multiple resolutions are computed from the generated audio. Simultaneously, this generated audio is also fed into a Discriminator, where the Discriminator loss is calculated to train the entire model.
+MuSeVox is a music source separation model inspired by the concept of vocoders. The input audio signal is first converted into a spectrogram, after which features are extracted using a Transformer. The extracted features are then reconstructed into an audio signal by a Decoder, and STFT loss is computed from the generated audio. Simultaneously, this generated audio is also fed into a Discriminator, where the Discriminator loss is calculated to train the entire model.
 
 Furthermore, the model architecture is based on [SCNet](https://arxiv.org/abs/2401.13276), which enhances the model’s ability to perform accurate source separation.
 
